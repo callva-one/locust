@@ -33,7 +33,7 @@ ADD https://astral.sh/uv/0.7.2/install.sh /uv-installer.sh
 RUN sh /uv-installer.sh && rm /uv-installer.sh
 ENV PATH="/root/.local/bin/:$PATH"
 # Set version for builds without .git directory (e.g., Railway deployments)
-ARG SETUPTOOLS_SCM_PRETEND_VERSION=dev
+ARG SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0.dev0
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LOCUST=${SETUPTOOLS_SCM_PRETEND_VERSION}
 RUN uv build && \
     pip install dist/*.whl
