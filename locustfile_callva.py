@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 # Shared storage for created call IDs (shared across all users)
 created_call_ids = []
 
+# Track calls created per org (max 350 per org)
+calls_created_per_org = {
+    "LoadTest1": 0,
+    "LoadTest2": 0,
+    "LoadTest3": 0,
+}
+MAX_CALLS_PER_ORG = 350
+
+# Throttle timers for infrequent tasks (per user)
+import threading
+org_lock = threading.Lock()  # Thread-safe counter updates
+
 
 class CallvaUser(HttpUser):
     """
@@ -65,6 +77,10 @@ class CallvaUser(HttpUser):
         creds = random.choice(self.api_credentials)  # Each user gets one of 3 orgs
         self.api_token = creds["token"]
         self.org_name = creds["org"]
+
+        # Throttle timers for infrequent tasks
+        self.last_scheduled_read = 0  # Last time we ran read_calls_scheduled
+
         logger.info(f"User started with org: {self.org_name}")
 
     def _get_headers(self):
@@ -89,12 +105,18 @@ class CallvaUser(HttpUser):
             "status": "scheduled"
         }
 
-    @task(3)
+    @task(10)
     def create_call(self):
         """
-        CREATE: Add a new call to the system.
-        Weight: 3 (~33% of requests)
+        CREATE: Add calls during ramp-up phase only (350 per org max).
+        Weight: 10 - High during ramp-up, then skips
         """
+        # Check if this org has reached the limit
+        with org_lock:
+            if calls_created_per_org[self.org_name] >= MAX_CALLS_PER_ORG:
+                # Silently skip - ramp-up phase complete for this org
+                return
+
         call_data = self._generate_call_data()
 
         with self.client.post(
@@ -107,14 +129,24 @@ class CallvaUser(HttpUser):
             if response.status_code == 201 or response.status_code == 200:
                 try:
                     data = response.json()
-                    # Extract call ID from response (adjust based on your API response structure)
+                    # Extract call ID from response
                     call_id = data.get("id") or data.get("call_id") or data.get("data", {}).get("id")
 
                     if call_id:
+                        # Increment counter for this org
+                        with org_lock:
+                            calls_created_per_org[self.org_name] += 1
+                            count = calls_created_per_org[self.org_name]
+
                         # Store globally for all users to update
                         created_call_ids.append(call_id)
                         # Store locally for this user
                         self.my_call_ids.append(call_id)
+
+                        # Log progress every 50 calls
+                        if count % 50 == 0:
+                            logger.info(f"[{self.org_name}] Created {count}/{MAX_CALLS_PER_ORG} calls")
+
                         response.success()
                     else:
                         logger.error(f"[{self.org_name}] CREATE: No ID in response - Status: {response.status_code}, Body: {data}")
@@ -126,12 +158,21 @@ class CallvaUser(HttpUser):
                 logger.error(f"[{self.org_name}] CREATE: Failed - Status: {response.status_code}, Body: {response.text}")
                 response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
-    @task(3)
+    @task(1)
     def read_calls_scheduled(self):
         """
         READ: Fetch scheduled calls (simulates external system polling).
-        Weight: 3 (~33% of requests)
+        Weight: 1 - Throttled to once every 30 seconds
         """
+        import time
+
+        # Throttle to once every 30 seconds
+        current_time = time.time()
+        if current_time - self.last_scheduled_read < 30:
+            return  # Skip this run
+
+        self.last_scheduled_read = current_time
+
         # Generate query parameters for realistic filtering
         call_at_gt = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -157,11 +198,11 @@ class CallvaUser(HttpUser):
                 logger.error(f"[{self.org_name}] READ SCHEDULED: Failed - Status: {response.status_code}, Body: {response.text}")
                 response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
-    @task(2)
+    @task(5)
     def update_call_status(self):
         """
         UPDATE: Change call status (simulates webhook/workflow updates).
-        Weight: 2 (~22% of requests)
+        Weight: 5 - Higher frequency in steady-state phase
         """
         # Use globally created IDs if available, fallback to user's own
         call_ids = created_call_ids if created_call_ids else self.my_call_ids
@@ -208,7 +249,7 @@ class ExternalSystemUser(HttpUser):
     """
 
     host = "https://staging.api.callva.one"
-    wait_time = between(2, 5)  # Slower polling
+    wait_time = between(3, 3)  # Run every 3 seconds during ramp-up
 
     # Multiple API keys with org names to distribute load across tenants
     api_credentials = [
@@ -246,8 +287,7 @@ class ExternalSystemUser(HttpUser):
             "call_at_lte": end_of_day,
             "per_page": "500",
             "page": "1",
-            "sort": "-last_call_time",
-            "group": "doctor_name"
+            "sort": "-last_call_time"
         }
 
         query_string = "&".join([f"{k}={v}" for k, v in params.items()])
