@@ -174,7 +174,7 @@ class CallvaUser(HttpUser):
         call_id = random.choice(call_ids)
 
         # Pick a realistic status transition
-        new_status = random.choice(["in_progress", "completed", "failed", "cancelled"])
+        new_status = random.choice(["in_progress", "complete", "failed", "starting"])
 
         update_data = {
             "status": new_status
