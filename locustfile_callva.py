@@ -36,11 +36,20 @@ class CallvaUser(HttpUser):
     # Wait 0.5-2 seconds between actions (aggressive load testing)
     wait_time = between(0.5, 2)
 
-    # Multiple API keys to distribute load across tenants and avoid rate limits
-    api_tokens = [
-        "VrfzWbYWeBy04CYErHIsGa1TNW3rkRteMBGZgcZ9bMnGYcAHVmrufOpuyY9eyemTRkNQRNG8dqV2wTHd",
-        "FTK5d9sBRiFroAN3fUTMoTW9w5GVaBDuiL2xrYRyEKwTOHCt8uAOi34o2TnWRsepUTtH2sYNw0z8PrZe",
-        "nNOOIJawblzHBKuQHsXTCFy8BiOWnTaj0NJ6YnYIn32moBZ7LQc2NGHfeZAT5NyrAr76UFdAKdHaU1Fl",
+    # Multiple API keys with org names to distribute load across tenants and avoid rate limits
+    api_credentials = [
+        {
+            "org": "LoadTest1",
+            "token": "VrfzWbYWeBy04CYErHIsGa1TNW3rkRteMBGZgcZ9bMnGYcAHVmrufOpuyY9eyemTRkNQRNG8dqV2wTHd"
+        },
+        {
+            "org": "LoadTest2",
+            "token": "FTK5d9sBRiFroAN3fUTMoTW9w5GVaBDuiL2xrYRyEKwTOHCt8uAOi34o2TnWRsepUTtH2sYNw0z8PrZe"
+        },
+        {
+            "org": "LoadTest3",
+            "token": "nNOOIJawblzHBKuQHsXTCFy8BiOWnTaj0NJ6YnYIn32moBZ7LQc2NGHfeZAT5NyrAr76UFdAKdHaU1Fl"
+        },
     ]
 
     # Sample data for generating realistic calls
@@ -51,9 +60,12 @@ class CallvaUser(HttpUser):
     ]
 
     def on_start(self):
-        """Called when a user starts - randomly assign API token to distribute load"""
+        """Called when a user starts - randomly assign API credentials to distribute load"""
         self.my_call_ids = []  # Track this user's created calls
-        self.api_token = random.choice(self.api_tokens)  # Each user gets one of 3 tokens
+        creds = random.choice(self.api_credentials)  # Each user gets one of 3 orgs
+        self.api_token = creds["token"]
+        self.org_name = creds["org"]
+        logger.info(f"User started with org: {self.org_name}")
 
     def _get_headers(self):
         """Generate request headers with auth"""
@@ -105,13 +117,13 @@ class CallvaUser(HttpUser):
                         self.my_call_ids.append(call_id)
                         response.success()
                     else:
-                        logger.error(f"CREATE: No ID in response - Status: {response.status_code}, Body: {data}")
+                        logger.error(f"[{self.org_name}] CREATE: No ID in response - Status: {response.status_code}, Body: {data}")
                         response.failure(f"No ID in response: {data}")
                 except Exception as e:
-                    logger.error(f"CREATE: Parse error - Status: {response.status_code}, Body: {response.text}, Error: {e}")
+                    logger.error(f"[{self.org_name}] CREATE: Parse error - Status: {response.status_code}, Body: {response.text}, Error: {e}")
                     response.failure(f"Failed to parse response: {e}")
             else:
-                logger.error(f"CREATE: Failed - Status: {response.status_code}, Body: {response.text}")
+                logger.error(f"[{self.org_name}] CREATE: Failed - Status: {response.status_code}, Body: {response.text}")
                 response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
     @task(3)
@@ -142,7 +154,7 @@ class CallvaUser(HttpUser):
             if response.status_code == 200:
                 response.success()
             else:
-                logger.error(f"READ SCHEDULED: Failed - Status: {response.status_code}, Body: {response.text}")
+                logger.error(f"[{self.org_name}] READ SCHEDULED: Failed - Status: {response.status_code}, Body: {response.text}")
                 response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
     @task(2)
@@ -181,10 +193,10 @@ class CallvaUser(HttpUser):
                 # Call might have been deleted, remove from our list
                 if call_id in self.my_call_ids:
                     self.my_call_ids.remove(call_id)
-                logger.warning(f"UPDATE: Call not found - ID: {call_id}, Status: 404")
+                logger.warning(f"[{self.org_name}] UPDATE: Call not found - ID: {call_id}, Status: 404")
                 response.failure("Call not found (404)")
             else:
-                logger.error(f"UPDATE: Failed - ID: {call_id}, Status: {response.status_code}, Body: {response.text}")
+                logger.error(f"[{self.org_name}] UPDATE: Failed - ID: {call_id}, Status: {response.status_code}, Body: {response.text}")
                 response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
 
@@ -198,16 +210,28 @@ class ExternalSystemUser(HttpUser):
     host = "https://staging.api.callva.one"
     wait_time = between(2, 5)  # Slower polling
 
-    # Multiple API keys to distribute load across tenants
-    api_tokens = [
-        "VrfzWbYWeBy04CYErHIsGa1TNW3rkRteMBGZgcZ9bMnGYcAHVmrufOpuyY9eyemTRkNQRNG8dqV2wTHd",
-        "FTK5d9sBRiFroAN3fUTMoTW9w5GVaBDuiL2xrYRyEKwTOHCt8uAOi34o2TnWRsepUTtH2sYNw0z8PrZe",
-        "nNOOIJawblzHBKuQHsXTCFy8BiOWnTaj0NJ6YnYIn32moBZ7LQc2NGHfeZAT5NyrAr76UFdAKdHaU1Fl",
+    # Multiple API keys with org names to distribute load across tenants
+    api_credentials = [
+        {
+            "org": "LoadTest1",
+            "token": "VrfzWbYWeBy04CYErHIsGa1TNW3rkRteMBGZgcZ9bMnGYcAHVmrufOpuyY9eyemTRkNQRNG8dqV2wTHd"
+        },
+        {
+            "org": "LoadTest2",
+            "token": "FTK5d9sBRiFroAN3fUTMoTW9w5GVaBDuiL2xrYRyEKwTOHCt8uAOi34o2TnWRsepUTtH2sYNw0z8PrZe"
+        },
+        {
+            "org": "LoadTest3",
+            "token": "nNOOIJawblzHBKuQHsXTCFy8BiOWnTaj0NJ6YnYIn32moBZ7LQc2NGHfeZAT5NyrAr76UFdAKdHaU1Fl"
+        },
     ]
 
     def on_start(self):
-        """Randomly assign API token to distribute load"""
-        self.api_token = random.choice(self.api_tokens)
+        """Randomly assign API credentials to distribute load"""
+        creds = random.choice(self.api_credentials)
+        self.api_token = creds["token"]
+        self.org_name = creds["org"]
+        logger.info(f"ExternalSystemUser started with org: {self.org_name}")
 
     @task
     def read_calls_heavy_load(self):
