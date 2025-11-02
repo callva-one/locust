@@ -51,5 +51,7 @@ RUN chown -R locust /opt/venv
 RUN locust --version
 USER locust
 WORKDIR /home/locust
+# Copy example locustfile for Railway deployment
+COPY --chown=locust:locust locustfile.py .
 EXPOSE 8089 5557
 ENTRYPOINT ["locust"]
