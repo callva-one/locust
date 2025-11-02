@@ -11,9 +11,14 @@ To use this file:
 """
 
 import random
+import logging
 from datetime import datetime, timedelta
 from locust import HttpUser, task, between
 import json
+
+# Configure logging to see detailed error responses
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 # Shared storage for created call IDs (shared across all users)
@@ -31,20 +36,24 @@ class CallvaUser(HttpUser):
     # Wait 0.5-2 seconds between actions (aggressive load testing)
     wait_time = between(0.5, 2)
 
-    # API credentials
-    api_token = "7qXwok5JvFEuMHzmcpH2Qi95cWDLFtNVLcJouGgNiDQoqGqHCRhF6b6HbFr5c1yHsbjk27fqwGZpcYi6"
+    # Multiple API keys to distribute load across tenants and avoid rate limits
+    api_tokens = [
+        "VrfzWbYWeBy04CYErHIsGa1TNW3rkRteMBGZgcZ9bMnGYcAHVmrufOpuyY9eyemTRkNQRNG8dqV2wTHd",
+        "FTK5d9sBRiFroAN3fUTMoTW9w5GVaBDuiL2xrYRyEKwTOHCt8uAOi34o2TnWRsepUTtH2sYNw0z8PrZe",
+        "nNOOIJawblzHBKuQHsXTCFy8BiOWnTaj0NJ6YnYIn32moBZ7LQc2NGHfeZAT5NyrAr76UFdAKdHaU1Fl",
+    ]
 
     # Sample data for generating realistic calls
-    first_names = ["Irina", "Ivan", "Maria", "Dmitri", "Anna", "Pavel", "Olga", "Sergei"]
-    last_names = ["Nevzorova", "Petrov", "Ivanov", "Sokolov", "Kuznetsov", "Popov"]
-    doctors = ["Ivan Rebert", "Dr. Smith", "Dr. Johnson", "Dr. Williams"]
-    locations = ["Toompuiestee kliinik", "Central Clinic", "North Branch", "South Office"]
-    languages = ["ru-RU", "et-EE", "en-US"]
-    statuses = ["scheduled", "in_progress", "completed", "failed", "cancelled"]
+    names = [
+        "Lisa Anderson", "John Smith", "Maria Garcia", "James Wilson",
+        "Anna Rodriguez", "Robert Brown", "Emma Martinez", "Michael Davis",
+        "Sophia Lopez", "David Johnson", "Olivia Williams", "Daniel Miller"
+    ]
 
     def on_start(self):
-        """Called when a user starts - can be used for setup"""
+        """Called when a user starts - randomly assign API token to distribute load"""
         self.my_call_ids = []  # Track this user's created calls
+        self.api_token = random.choice(self.api_tokens)  # Each user gets one of 3 tokens
 
     def _get_headers(self):
         """Generate request headers with auth"""
@@ -55,30 +64,17 @@ class CallvaUser(HttpUser):
 
     def _generate_call_data(self):
         """Generate realistic call data with random variations"""
-        first_name = random.choice(self.first_names)
-        last_name = random.choice(self.last_names)
-
         # call_at: Current date at 00:00:00
         today = datetime.now().date()
         call_at = datetime.combine(today, datetime.min.time())
 
-        # appointment_time: 1-24 hours after call_at
-        appointment_time = call_at + timedelta(hours=random.randint(1, 24))
-
         return {
-            "full_name": f"{first_name} {last_name}",
-            "first_name": first_name,
-            "last_name": last_name,
-            "phone": str(random.randint(1000000, 9999999)),
-            "doctor_name": random.choice(self.doctors),
-            "location": random.choice(self.locations),
-            "call_at": call_at.strftime("%Y-%m-%dT%H:%M:%S.999+03:00"),
-            "appointment_time": appointment_time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-            "status": "scheduled",
+            "name": random.choice(self.names),
+            "phone": f"+1555{random.randint(0, 9):01d}{random.randint(100, 999):03d}",
+            "call_at": call_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "times_called": 0,
-            "language": random.choice(self.languages),
-            "lang_confidence_score": random.randint(75, 100),
-            "name_reason": f"{first_name} and {last_name} are common names."
+            "provider": "Vapi",
+            "status": "scheduled"
         }
 
     @task(3)
@@ -109,11 +105,14 @@ class CallvaUser(HttpUser):
                         self.my_call_ids.append(call_id)
                         response.success()
                     else:
+                        logger.error(f"CREATE: No ID in response - Status: {response.status_code}, Body: {data}")
                         response.failure(f"No ID in response: {data}")
                 except Exception as e:
+                    logger.error(f"CREATE: Parse error - Status: {response.status_code}, Body: {response.text}, Error: {e}")
                     response.failure(f"Failed to parse response: {e}")
             else:
-                response.failure(f"Got status {response.status_code}")
+                logger.error(f"CREATE: Failed - Status: {response.status_code}, Body: {response.text}")
+                response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
     @task(3)
     def read_calls_scheduled(self):
@@ -143,7 +142,8 @@ class CallvaUser(HttpUser):
             if response.status_code == 200:
                 response.success()
             else:
-                response.failure(f"Got status {response.status_code}")
+                logger.error(f"READ SCHEDULED: Failed - Status: {response.status_code}, Body: {response.text}")
+                response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
     @task(2)
     def update_call_status(self):
@@ -181,9 +181,11 @@ class CallvaUser(HttpUser):
                 # Call might have been deleted, remove from our list
                 if call_id in self.my_call_ids:
                     self.my_call_ids.remove(call_id)
+                logger.warning(f"UPDATE: Call not found - ID: {call_id}, Status: 404")
                 response.failure("Call not found (404)")
             else:
-                response.failure(f"Got status {response.status_code}")
+                logger.error(f"UPDATE: Failed - ID: {call_id}, Status: {response.status_code}, Body: {response.text}")
+                response.failure(f"Got status {response.status_code}: {response.text[:200]}")
 
 
 # Additional user class for read-heavy workload (simulates external system)
@@ -196,7 +198,16 @@ class ExternalSystemUser(HttpUser):
     host = "https://staging.api.callva.one"
     wait_time = between(2, 5)  # Slower polling
 
-    api_token = "7qXwok5JvFEuMHzmcpH2Qi95cWDLFtNVLcJouGgNiDQoqGqHCRhF6b6HbFr5c1yHsbjk27fqwGZpcYi6"
+    # Multiple API keys to distribute load across tenants
+    api_tokens = [
+        "VrfzWbYWeBy04CYErHIsGa1TNW3rkRteMBGZgcZ9bMnGYcAHVmrufOpuyY9eyemTRkNQRNG8dqV2wTHd",
+        "FTK5d9sBRiFroAN3fUTMoTW9w5GVaBDuiL2xrYRyEKwTOHCt8uAOi34o2TnWRsepUTtH2sYNw0z8PrZe",
+        "nNOOIJawblzHBKuQHsXTCFy8BiOWnTaj0NJ6YnYIn32moBZ7LQc2NGHfeZAT5NyrAr76UFdAKdHaU1Fl",
+    ]
+
+    def on_start(self):
+        """Randomly assign API token to distribute load"""
+        self.api_token = random.choice(self.api_tokens)
 
     @task
     def read_calls_heavy_load(self):
