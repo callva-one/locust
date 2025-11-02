@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "locust --web-host 0.0.0.0 --web-port $PORT --master",
+    "startCommand": "locust --web-host 0.0.0.0 --web-port 80 --master",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
